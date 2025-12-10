@@ -78,6 +78,24 @@ def render_risk_calculator():
     # --- INPUTS CONTAINER ---
     with st.container(border=True):
         st.markdown("#### 📝 Patient Data Entry")
+        # NEW: FHIR IMPORT BUTTON
+    col_load, col_clear = st.columns([1, 4])
+    with col_load:
+        if st.button("📥 Load Patient from EHR (FHIR)", type="secondary"):
+            # Simulate fetching JSON from an API like Epic/Cerner
+            st.session_state['fhir_import'] = {
+                'age': 68, 'gender': 'Male', 'weight': 82.5,
+                'sbp': 88, 'dbp': 50, 'hr': 115, 'rr': 28, 'temp': 39.2, 'spo2': 89,
+                'creat': 2.4, 'wbc': 18.5, 'lactate': 4.2, 'glucose': 145,
+                'history': ['anticoag', 'heart_failure']
+            }
+            st.success("✅ HL7/FHIR Data Stream Imported Successfully")
+
+    # Helper to retrieve loaded values safely
+    def get_val(key, default):
+        if 'fhir_import' in st.session_state:
+            return st.session_state['fhir_import'].get(key, default)
+        return default
         
         with st.form("risk_form"):
             
@@ -85,88 +103,101 @@ def render_risk_calculator():
             col_left, col_right = st.columns([1, 1], gap="medium")
             
             # --- LEFT COLUMN: Demographics & Vitals ---
-            with col_left:
-                st.markdown("##### 👤 Patient Profile")
-                l1, l2 = st.columns(2)
-                age = l1.number_input("Age (Years)", min_value=0, max_value=120, value=0)
-                gender = l2.selectbox("Gender", ["Male", "Female"])
-                
-                w_val, w_unit = st.columns([2, 1]) 
-                weight_input = w_val.number_input("Weight", 0.0, 400.0, 0.0)
-                weight_scale = w_unit.selectbox("Unit", ["kg", "lbs"], key="w_unit")
-                
-                # Add Height
-                height = st.number_input("Height (cm)", 0, 250, 0)
-                
-                # Weight Logic
-                weight_kg = weight_input * 0.453592 if weight_scale == "lbs" else weight_input
-                if height > 0:
-                    bmi = weight_kg / ((height/100)**2)
-                else:
-                    bmi = 0.0
+        with col_left:
+            st.markdown("##### 👤 Patient Profile")
+            l1, l2 = st.columns(2)
+            # CHANGE 1: Added get_val('age')
+            age = l1.number_input("Age (Years)", min_value=0, max_value=120, value=get_val('age', 0))
+            
+            # For gender, we need to find the index
+            gender_default = 0
+            if get_val('gender', 'Male') == 'Female': gender_default = 1
+            gender = l2.selectbox("Gender", ["Male", "Female"], index=gender_default)
+            
+            w_val, w_unit = st.columns([2, 1]) 
+            # CHANGE 2: Added get_val('weight')
+            weight_input = w_val.number_input("Weight", 0.0, 400.0, float(get_val('weight', 0.0)))
+            weight_scale = w_unit.selectbox("Unit", ["kg", "lbs"], key="w_unit")
+            
+            height = st.number_input("Height (cm)", 0, 250, 0)
+            
+            # Weight Logic
+            weight_kg = weight_input * 0.453592 if weight_scale == "lbs" else weight_input
+            if height > 0:
+                bmi = weight_kg / ((height/100)**2)
+            else:
+                bmi = 0.0
 
-                st.markdown("##### 🩺 Vitals")
-                v1, v2 = st.columns(2)
-                sys_bp = v1.number_input("Systolic BP (Normal: 110-120)", 0, 300, 0)
-                dia_bp = v2.number_input("Diastolic BP (Normal: 70-80)", 0, 200, 0)
-                
-                v3, v4 = st.columns(2)
-                hr = v3.number_input("Heart Rate (Normal: 60-100)", 0, 300, 0)
-                resp_rate = v4.number_input("Resp Rate (Normal: 12-20)", 0, 60, 0)
-                
-                v5, v6 = st.columns(2)
-                temp_c = v5.number_input("Temp °C (Normal: 36.5-37.5)", 0.0, 45.0, 0.0, step=0.1)
-                o2_sat = v6.number_input("O2 Sat % (Normal: >95%)", 0, 100, 0)
+            st.markdown("##### 🩺 Vitals")
+            v1, v2 = st.columns(2)
+            # CHANGE 3: Added get_val for BPs
+            sys_bp = v1.number_input("Systolic BP (Normal: 110-120)", 0, 300, get_val('sbp', 0))
+            dia_bp = v2.number_input("Diastolic BP (Normal: 70-80)", 0, 200, get_val('dbp', 0))
+            
+            v3, v4 = st.columns(2)
+            # CHANGE 4: Added get_val for HR and RR
+            hr = v3.number_input("Heart Rate (Normal: 60-100)", 0, 300, get_val('hr', 0))
+            resp_rate = v4.number_input("Resp Rate (Normal: 12-20)", 0, 60, get_val('rr', 0))
+            
+            v5, v6 = st.columns(2)
+            # CHANGE 5: Added get_val for Temp and O2
+            temp_c = v5.number_input("Temp °C (Normal: 36.5-37.5)", 0.0, 45.0, float(get_val('temp', 0.0)), step=0.1)
+            o2_sat = v6.number_input("O2 Sat % (Normal: >95%)", 0, 100, get_val('spo2', 0))
 
-            # --- RIGHT COLUMN: Labs & History ---
-            with col_right:
-                st.markdown("##### 🧪 Critical Labs")
-                
-                lab1, lab2 = st.columns(2)
-                creat = lab1.number_input("Creatinine (0.6-1.2 mg/dL)", 0.0, 20.0, 0.0)
-                bun = lab2.number_input("Blood Urea Nitrogen (7-20)", 0, 100, 0)
-                
-                lab3, lab4 = st.columns(2)
-                potassium = lab3.number_input("Potassium (3.5-5.0 mmol/L)", 0.0, 10.0, 0.0)
-                glucose = lab4.number_input("Glucose (70-100 mg/dL)", 0, 1000, 0)
-                
-                lab5, lab6 = st.columns(2)
-                wbc = lab5.number_input("WBC (4.5-11.0 10^9/L)", 0.0, 50.0, 0.0)
-                hgb = lab6.number_input("Hemoglobin (13.5-17.5 g/dL)", 0.0, 20.0, 0.0)
-                
-                lab7, lab8 = st.columns(2)
-                platelets = lab7.number_input("Platelets (150-450 10^9/L)", 0, 1000, 0)
-                inr = lab8.number_input("INR (Clotting Time) [0.9-1.1]", 0.0, 10.0, 0.0)
-                
-                lactate = st.number_input("Lactate (Normal: < 2.0 mmol/L)", 0.0, 20.0, 0.0)
+        # --- RIGHT COLUMN: Labs & History ---
+        with col_right:
+            st.markdown("##### 🧪 Critical Labs")
+            
+            lab1, lab2 = st.columns(2)
+            # CHANGE 6: Added get_val for Creatinine and BUN
+            creat = lab1.number_input("Creatinine (0.6-1.2 mg/dL)", 0.0, 20.0, float(get_val('creat', 0.0)))
+            bun = lab2.number_input("Blood Urea Nitrogen (7-20)", 0, 100, get_val('bun', 0))
+            
+            lab3, lab4 = st.columns(2)
+            # CHANGE 7: Added get_val for Potassium and Glucose
+            potassium = lab3.number_input("Potassium (3.5-5.0 mmol/L)", 0.0, 10.0, float(get_val('k', 0.0)))
+            glucose = lab4.number_input("Glucose (70-100 mg/dL)", 0, 1000, get_val('glucose', 0))
+            
+            lab5, lab6 = st.columns(2)
+            # CHANGE 8: Added get_val for WBC and Hgb
+            wbc = lab5.number_input("WBC (4.5-11.0 10^9/L)", 0.0, 50.0, float(get_val('wbc', 0.0)))
+            hgb = lab6.number_input("Hemoglobin (13.5-17.5 g/dL)", 0.0, 20.0, float(get_val('hgb', 0.0)))
+            
+            lab7, lab8 = st.columns(2)
+            platelets = lab7.number_input("Platelets (150-450 10^9/L)", 0, 1000, get_val('plt', 0))
+            inr = lab8.number_input("INR (Clotting Time) [0.9-1.1]", 0.0, 10.0, float(get_val('inr', 0.0)))
+            
+            lactate = st.number_input("Lactate (Normal: < 2.0 mmol/L)", 0.0, 20.0, float(get_val('lactate', 0.0)))
 
-                st.markdown("##### 📋 Medical History")
-                h1, h2 = st.columns(2)
-                anticoag = h1.checkbox("Anticoagulant Use")
-                liver_disease = h2.checkbox("Liver Disease")
-                
-                h3, h4 = st.columns(2)
-                heart_failure = h3.checkbox("Heart Failure")
-                gi_bleed = h4.checkbox("History of GI Bleed")
-                
-                m1, m2 = st.columns(2)
-                nsaid = m1.checkbox("NSAID Use")
-                active_chemo = m2.checkbox("Active Chemo")
-                
-                m3, m4 = st.columns(2)
-                diuretic = m3.checkbox("Diuretic Use")
-                acei = m4.checkbox("ACEi/ARB")
-                
-                m5, m6 = st.columns(2)
-                insulin = m5.checkbox("Insulin")
-                hba1c_high = m6.checkbox("Uncontrolled Diabetes")
-                
-                altered_mental = st.checkbox("Altered Mental Status (Confusion)")
-                pain = 0
+            st.markdown("##### 📋 Medical History")
+            # We use get_val to check if history exists in the list
+            hist_list = get_val('history', [])
+            
+            h1, h2 = st.columns(2)
+            anticoag = h1.checkbox("Anticoagulant Use", value=('anticoag' in hist_list))
+            liver_disease = h2.checkbox("Liver Disease", value=('liver' in hist_list))
+            
+            h3, h4 = st.columns(2)
+            heart_failure = h3.checkbox("Heart Failure", value=('heart_failure' in hist_list))
+            gi_bleed = h4.checkbox("History of GI Bleed", value=('gi_bleed' in hist_list))
+            
+            m1, m2 = st.columns(2)
+            nsaid = m1.checkbox("NSAID Use")
+            active_chemo = m2.checkbox("Active Chemo")
+            
+            m3, m4 = st.columns(2)
+            diuretic = m3.checkbox("Diuretic Use")
+            acei = m4.checkbox("ACEi/ARB")
+            
+            m5, m6 = st.columns(2)
+            insulin = m5.checkbox("Insulin")
+            hba1c_high = m6.checkbox("Uncontrolled Diabetes")
+            
+            altered_mental = st.checkbox("Altered Mental Status (Confusion)", value=('ams' in hist_list))
+            pain = 0
 
-            st.write("") 
-            submitted = st.form_submit_button("🚀 Run Clinical Analysis", type="primary", use_container_width=True)
-
+        st.write("") 
+        submitted = st.form_submit_button("🚀 Run Clinical Analysis", type="primary", use_container_width=True)
     # --- LOGIC & RESULTS ---
     if submitted:
         final_temp_c = temp_c 
