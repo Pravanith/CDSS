@@ -383,16 +383,20 @@ def consult_ai_doctor(role, user_input, patient_context=None):
 
         if role == 'risk_assessment':
             prompt = f"""
-            Act as a Senior ICU Consultant. Analyze this patient:
+            Act as a Senior Critical Care Physician. Analyze this patient data:
             - Age: {patient_context.get('age')}
-            - SBP: {patient_context.get('sys_bp')}
-            - Predicted Bleed Risk: {patient_context.get('bleeding_risk'):.1f}%
-            - AKI Risk: {patient_context.get('aki_risk')}%
-            - Sepsis Score: {patient_context.get('sepsis_risk')}
+            - Vitals: BP {patient_context.get('sys_bp')}/{patient_context.get('dia_bp')}, HR {patient_context.get('hr')}, RR {patient_context.get('resp_rate')}, Temp {patient_context.get('temp_c')}
+            - Labs: Lactate {patient_context.get('lactate')}, Creatinine {patient_context.get('creat')}
             
-            Task: 
-            1. Identify primary threat.
-            2. Suggest 3 immediate actions.
+            Strictly follow these guidelines in your assessment:
+            1. **Sepsis-3 Guidelines:** Does the patient meet qSOFA (RR>22, AMS, SBP<100)? 
+            2. **KDIGO Guidelines:** Does the creatinine indicate AKI Stage 1, 2, or 3?
+            3. **Surviving Sepsis Campaign:** If septic, recommend the "Hour-1 Bundle" (Lactate, Cultures, Antibiotics, 30ml/kg Fluids).
+            
+            Output format:
+            **PRIMARY ASSESSMENT:** [Diagnosis]
+            **GUIDELINE CRITERIA:** [Cite specific rules met]
+            **IMMEDIATE ORDERS:** [Bulleted list of actions]
             """
         elif role == 'provider':
              prompt = f"Expert Medical Consult. Query: {user_input}. Provide differential diagnosis."
