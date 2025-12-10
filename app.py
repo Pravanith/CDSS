@@ -712,24 +712,40 @@ def render_dashboard():
         col_chart, col_vitals = st.columns([3, 1])
         
         with col_chart:
-            # Simulate a live trace based on the INPUT BP and HR
-            # We add small random noise to make it look "live" but centered on your inputs
-            base_sbp = data.get('sys_bp', 120)
-            base_hr = data.get('hr', 80)
+            st.markdown("##### 📉 Hemodynamic Trend (Last 4 Hours)")
             
-            chart_data = pd.DataFrame({
-                'Time': range(20),
-                'Systolic BP': np.random.normal(base_sbp, 2, 20), # Jitters around input BP
-                'Heart Rate': np.random.normal(base_hr, 2, 20)    # Jitters around input HR
-            }).melt('Time', var_name='Metric', value_name='Value')
+            # Smart Trend Logic:
+            # If patient is critical, show DETERIORATION trend (Line going down)
+            # If patient is stable, show FLAT trend
             
-            c = alt.Chart(chart_data).mark_line(interpolate='basis', strokeWidth=3).encode(
-                x=alt.X('Time', axis=None),
-                y=alt.Y('Value', scale=alt.Scale(zero=False)), # Auto-scale to show movement
-                color=alt.Color('Metric', scale=alt.Scale(range=['#FF4B4B', '#00CC96']))
-            ).properties(height=200)
+            current_sbp = data.get('sys_bp', 120)
+            status = data.get('status', 'Stable')
+            
+            if status == 'Critical':
+                # Create a downward slope (Shock trajectory)
+                # Starts high (e.g., 120) and drops to current (e.g., 85)
+                trend_values = np.linspace(current_sbp + 40, current_sbp, 20) 
+                trend_color = '#FF4B4B' # Red
+            else:
+                # Create a stable line with noise
+                trend_values = np.random.normal(current_sbp, 3, 20)
+                trend_color = '#00CC96' # Green
+
+            chart_df = pd.DataFrame({
+                'Time': pd.date_range(end=datetime.datetime.now(), periods=20, freq='15min'),
+                'Systolic BP': trend_values
+            })
+            
+            c = alt.Chart(chart_df).mark_line(strokeWidth=4, color=trend_color).encode(
+                x=alt.X('Time', axis=alt.Axis(format='%H:%M')),
+                y=alt.Y('Systolic BP', scale=alt.Scale(domain=[40, 200])),
+                tooltip=['Time', 'Systolic BP']
+            ).properties(height=250)
             
             st.altair_chart(c, use_container_width=True)
+            
+            if status == 'Critical':
+                st.caption("⚠️ **Trend Alert:** Significant drop in MAP detected over last 4 hours.")
 
         with col_vitals:
             # Display the EXACT numbers entered
@@ -1006,6 +1022,47 @@ else:
             "🧠 AI Clinical Consultant"
         ])
         st.info("v3.0 - AI Integrated")
+        # --- IN APP.PY (New Function) ---
+
+def render_triage_board():
+    st.subheader("🚑 Emergency Department Triage Board")
+    
+    # 1. Generate Fake Waiting Room Data
+    triage_data = pd.DataFrame({
+        'Patient ID': ['PT-1092', 'PT-1093', 'PT-1094', 'PT-1095', 'PT-1096'],
+        'Complaint': ['Chest Pain', 'Fever/Confusion', 'Ankle Pain', 'SOB', 'Med Refill'],
+        'SIRS Score': [1, 4, 0, 3, 0],
+        'BP': ['140/90', '85/50', '120/80', '110/70', '130/85'],
+        'HR': [88, 130, 72, 105, 68],
+        'O2 Sat': [98, 88, 99, 91, 99],
+        'Wait Time': ['15 min', '2 min', '45 min', '10 min', '60 min']
+    })
+
+    # 2. Assign Priority Logic
+    def assign_priority(row):
+        if row['SIRS Score'] >= 3 or int(row['O2 Sat']) < 90:
+            return '🔴 CRITICAL (Immed)'
+        elif row['SIRS Score'] >= 2:
+            return '🟡 URGENT (15m)'
+        else:
+            return '🟢 NON-URGENT'
+
+    triage_data['Priority'] = triage_data.apply(assign_priority, axis=1)
+    
+    # 3. Sort by Priority (Critical First)
+    triage_data = triage_data.sort_values(by='Priority', ascending=False)
+
+    # 4. Display styling
+    def highlight_critical(val):
+        color = 'red' if 'CRITICAL' in val else 'orange' if 'URGENT' in val else 'green'
+        return f'background-color: {color}; color: white; font-weight: bold;'
+
+    st.dataframe(
+        triage_data.style.map(highlight_critical, subset=['Priority']),
+        use_container_width=True,
+        hide_index=True
+    )
+        
 
     if menu == "Risk Calculator":
         render_risk_calculator()
