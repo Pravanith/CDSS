@@ -1,4 +1,3 @@
-import json
 import sqlite3
 import pandas as pd
 import numpy as np
@@ -6,6 +5,9 @@ import xgboost as xgb
 import os
 import re
 import datetime
+import json
+import google.generativeai as genai
+import streamlit as st
 
 # --- RECOMMENDATION IMPLEMENTED: Robust Import ---
 # Prevents app crash if drug_data.py is missing
@@ -19,7 +21,6 @@ except ImportError:
 # 1. DATABASE MANAGEMENT
 # ==========================================
 def get_db_connection():
-    # --- RECOMMENDATION IMPLEMENTED: Thread Safety ---
     # check_same_thread=False is crucial for Streamlit's multi-threaded environment
     return sqlite3.connect('clinical_data.db', check_same_thread=False)
 
@@ -94,29 +95,39 @@ def load_bleeding_model():
         return HeuristicFallbackModel()
 
 # ==========================================
-# 3. CLINICAL CALCULATORS (LOGIC)
+# 3. CLINICAL CALCULATORS (ZERO-SAFE UPDATED)
 # ==========================================
 def calculate_aki_risk(age, diuretic, acei, sys_bp, chemo, creat, nsaid, heart_failure):
     score = 0
+    # Booleans are safe (True/False)
     score += 30 if diuretic else 0
     score += 40 if acei else 0
     score += 25 if nsaid else 0
     score += 15 if heart_failure else 0
     score += 20 if chemo else 0
-    if age > 0: score += 20 if age > 75 else 0
+    
+    # Integers: Only calculate if value is REAL (> 0)
+    if age > 75: score += 20
+    
+    # BP: Only check if we have a real reading
     if sys_bp > 0:
         score += 10 if sys_bp > 160 else 0
         score += 20 if sys_bp < 90 else 0
+    
+    # Creatinine: Only check if valid
     if creat > 0:
         if creat > 1.5: score += 30
         elif creat > 1.2: score += 15
+        
     return min(score, 100)
 
 def calculate_sepsis_risk(sys_bp, resp_rate, altered_mental, temp_c):
     qsofa = 0
+    # Only score if values are entered (> 0) to avoid false alarms
     if sys_bp > 0 and sys_bp <= 100: qsofa += 1
     if resp_rate > 0 and resp_rate >= 22: qsofa += 1
     if altered_mental: qsofa += 1
+    # Temp is often 0.0 if missing, so ignore if 0
     if temp_c > 0 and (temp_c > 38.0 or temp_c < 36.0): qsofa += 0.5
     
     if qsofa >= 2: return 90
@@ -143,12 +154,10 @@ def calculate_sirs_score(temp_c, hr, resp_rate, wbc):
 # 4. INTERACTION CHECKER
 # ==========================================
 def normalize_text(text):
-    """Simple normalization to handle slight variations in drug names"""
     if not isinstance(text, str): return ""
     return text.lower().strip()
 
 def check_interaction(d1, d2):
-    # --- RECOMMENDATION IMPLEMENTED: Better Normalization ---
     d1_clean = normalize_text(d1)
     d2_clean = normalize_text(d2)
     
@@ -178,7 +187,7 @@ KNOWLEDGE_BASE = {
         "vtach": "Ventricular Tachycardia. Life-threatening. Pulse? Cardiovert. No pulse? Defibrillate.",
         "vfib": "Ventricular Fibrillation. Cardiac Arrest. No pulse. CPR + Defibrillation immediately.",
 
-        # --- RESPIRATORY ---
+    # --- RESPIRATORY ---
         "asthma": "Airway inflammation. Wheezing. Rescue: Albuterol. Maintenance: Steroids.",
         "copd": "Chronic Obstructive Pulmonary Disease. Air trapping. Smokers. Risk of CO2 retention.",
         "pneumonia": "Lung infection. Fever, cough, consolidation on X-Ray. Antibiotics needed.",
@@ -192,7 +201,7 @@ KNOWLEDGE_BASE = {
         "croup": "Pediatric viral infection. 'Barking seal' cough. Steeple sign on X-ray.",
         "rsv": "Respiratory Syncytial Virus. Bronchiolitis in kids. Watch for hypoxia.",
 
-        # --- NEUROLOGY ---
+    # --- NEUROLOGY ---
         "cva": "Cerebrovascular Accident (Stroke). Ischemic vs Hemorrhagic. Time is Brain.",
         "stroke": "Brain attack. BE-FAST: Balance, Eyes, Face, Arms, Speech, Time. CT Head stat.",
         "tia": "Transient Ischemic Attack. Warning stroke. Symptoms resolve <24h. High risk of future stroke.",
@@ -208,7 +217,7 @@ KNOWLEDGE_BASE = {
         "als": "Lou Gehrig's Disease. Motor neuron death. Paralysis. Sensation intact.",
         "guillain-barre": "Ascending paralysis after infection. Watch breathing.",
 
-        # --- GASTROINTESTINAL ---
+    # --- GASTROINTESTINAL ---
         "gerd": "Acid Reflux. Heartburn. Risk of esophageal damage. PPIs (Omeprazole).",
         "pud": "Peptic Ulcer Disease. Stomach ulcers. Pain with food. H. Pylori or NSAIDs.",
         "gi bleed": "Upper (Vomit blood) vs Lower (Bloody stool). Monitor Hemoglobin.",
@@ -223,7 +232,7 @@ KNOWLEDGE_BASE = {
         "c diff": "Antibiotic diarrhea. Contagious spores. Soap & Water wash only.",
         "bowel obstruction": "Blockage. Constipation, vomiting, distension. NPO + NG Tube.",
 
-        # --- RENAL ---
+    # --- RENAL ---
         "aki": "Acute Kidney Injury. Creatinine spike. Causes: Dehydration, Contrast, NSAIDs.",
         "ckd": "Chronic Kidney Disease. GFR < 60 > 3 months. Diabetes/HTN causes.",
         "esrd": "End Stage Renal Disease. Needs Dialysis or Transplant.",
@@ -232,7 +241,7 @@ KNOWLEDGE_BASE = {
         "bph": "Enlarged prostate. Dribbling, frequency in older men.",
         "rhabdo": "Muscle breakdown. Clogs kidneys. Tea-colored urine. Fluids.",
 
-        # --- ENDOCRINE ---
+    # --- ENDOCRINE ---
         "diabetes": "Metabolic disease. High sugar. Causes damage to eyes, kidneys, nerves.",
         "diabetes type 1": "Autoimmune. No insulin. DKA risk. Insulin dependent.",
         "diabetes type 2": "Insulin resistance. Lifestyle + Metformin.",
@@ -245,7 +254,7 @@ KNOWLEDGE_BASE = {
         "addison": "Adrenal insufficiency. Low cortisol. Bronze skin, hypotension.",
         "cushing": "High cortisol. Moon face, buffalo hump, high sugar.",
 
-        # --- INFECTIOUS DISEASE ---
+    # --- INFECTIOUS DISEASE ---
         "sepsis": "Infection + Organ Failure. qSOFA criteria. Antibiotics ASAP.",
         "septic shock": "Sepsis + Hypotension requiring pressors.",
         "flu": "Influenza. Sudden fever, aches. Tamiflu < 48h.",
@@ -258,7 +267,7 @@ KNOWLEDGE_BASE = {
         "fever": "Temp > 100.4F (38C). Sign of inflammation.",
         "neutropenic fever": "Fever in chemo patient. ONCOLOGIC EMERGENCY.",
 
-        # --- HEMATOLOGY ---
+    # --- HEMATOLOGY ---
         "anemia": "Low Hemoglobin. Fatigue, pallor. Iron deficiency common.",
         "sickle cell": "Genetic. Pain crises. RBCs shape sickle. Fluids/Pain meds.",
         "thrombocytopenia": "Low platelets. Bleeding risk.",
@@ -267,7 +276,7 @@ KNOWLEDGE_BASE = {
         "neutropenia": "Low neutrophils. Severe infection risk. Fever is emergency.",
         "dvt": "Deep Vein Thrombosis. Leg clot.",
 
-        # --- MUSCULOSKELETAL ---
+    # --- MUSCULOSKELETAL ---
         "osteoarthritis": "Wear-and-tear. Joint pain. Worse with use.",
         "rheumatoid arthritis": "Autoimmune. Morning stiffness > 30 mins.",
         "gout": "Uric acid crystals. Big toe pain. Colchicine/Allopurinol.",
@@ -275,7 +284,7 @@ KNOWLEDGE_BASE = {
         "compartment syndrome": "Muscle pressure. Pain out of proportion. Emergency surgery.",
         "rhabdomyolysis": "Muscle breakdown releasing myoglobin. Kidney damage. Tea-colored urine.",
 
-        # --- MEDICATIONS ---
+    # --- MEDICATIONS ---
         "lisinopril": "ACE Inhibitor (BP). Side effects: Cough, High K+.",
         "amlodipine": "Calcium Channel Blocker (BP). Side effect: Leg swelling.",
         "metoprolol": "Beta-blocker. Lowers HR and BP.",
@@ -311,7 +320,7 @@ KNOWLEDGE_BASE = {
         "diphenhydramine": "Benadryl. Allergy. Sedating.",
         "epinephrine": "Adrenaline. Anaphylaxis/Code Blue.",
 
-        # --- LABS ---
+    # --- LABS ---
         "wbc": "White Blood Cells. High=Infection.",
         "hgb": "Hemoglobin. Low=Anemia. <7 Transfuse.",
         "plt": "Platelets. Low=Bleeding risk.",
@@ -327,7 +336,7 @@ KNOWLEDGE_BASE = {
         "lactate": "Sepsis marker. >2.0 indicates shock.",
         "ph": "Acidity (7.35-7.45).",
 
-        # --- ABBREVIATIONS ---
+    # --- ABBREVIATIONS ---
         "bid": "Twice a day.",
         "tid": "Three times a day.",
         "qid": "Four times a day.",
@@ -354,8 +363,6 @@ def chatbot_response(text):
 
     # 2. Fallback to AI
     try:
-        import google.generativeai as genai
-        import streamlit as st
         api_key = st.secrets["GEMINI_API_KEY"]
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel('gemini-2.0-flash')
@@ -374,9 +381,6 @@ def chatbot_response(text):
 # 6. AI CONSULTANTS (GEMINI)
 # ==========================================
 def consult_ai_doctor(role, user_input, patient_context=None):
-    import google.generativeai as genai
-    import streamlit as st
-
     try:
         api_key = st.secrets["GEMINI_API_KEY"]
         genai.configure(api_key=api_key)
@@ -384,23 +388,12 @@ def consult_ai_doctor(role, user_input, patient_context=None):
 
         if role == 'risk_assessment':
             prompt = f"""
-            Act as a Senior Critical Care Physician. Analyze this patient data:
-            - Age: {patient_context.get('age')}
-            - Vitals: BP {patient_context.get('sys_bp')}/{patient_context.get('dia_bp')}, HR {patient_context.get('hr')}, RR {patient_context.get('resp_rate')}, Temp {patient_context.get('temp_c')}
-            - Labs: Lactate {patient_context.get('lactate')}, Creatinine {patient_context.get('creat')}
-            
-            Strictly follow these guidelines in your assessment:
-            1. **Sepsis-3 Guidelines:** Does the patient meet qSOFA (RR>22, AMS, SBP<100)? 
-            2. **KDIGO Guidelines:** Does the creatinine indicate AKI Stage 1, 2, or 3?
-            3. **Surviving Sepsis Campaign:** If septic, recommend the "Hour-1 Bundle" (Lactate, Cultures, Antibiotics, 30ml/kg Fluids).
-            
-            Output format:
-            **PRIMARY ASSESSMENT:** [Diagnosis]
-            **GUIDELINE CRITERIA:** [Cite specific rules met]
-            **IMMEDIATE ORDERS:** [Bulleted list of actions]
+            Act as a Senior ICU Consultant. Analyze this patient:
+            {patient_context}
+            Task: Identify primary threat and suggest 3 immediate actions.
             """
         elif role == 'provider':
-             prompt = f"Expert Medical Consult. Query: {user_input}. Provide differential diagnosis."
+             prompt = f"Expert Medical Consult. Query: {user_input}. Context: {patient_context}. Provide differential diagnosis."
         
         response = model.generate_content(prompt)
         return response.text
@@ -408,8 +401,6 @@ def consult_ai_doctor(role, user_input, patient_context=None):
         return f"⚠️ AI Error: {str(e)}"
 
 def generate_discharge_summary(patient_data):
-    import google.generativeai as genai
-    import streamlit as st
     try:
         api_key = st.secrets["GEMINI_API_KEY"]
         genai.configure(api_key=api_key)
@@ -420,8 +411,6 @@ def generate_discharge_summary(patient_data):
         return f"Error: {str(e)}"
 
 def analyze_drug_interactions(drug_list):
-    import google.generativeai as genai
-    import streamlit as st
     try:
         api_key = st.secrets["GEMINI_API_KEY"]
         genai.configure(api_key=api_key)
@@ -432,21 +421,16 @@ def analyze_drug_interactions(drug_list):
         return f"Error: {str(e)}"
 
 # ==========================================
-# NEW: AI NOTE READER (Add to bottom of backend.py)
+# 7. NEW: AI NOTE PARSER (THE EHR READER)
 # ==========================================
 def parse_patient_note(note_text):
-    import google.generativeai as genai
-    import streamlit as st
-    
     try:
-        # Configure Gemini
         api_key = st.secrets["GEMINI_API_KEY"]
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel('gemini-2.0-flash')
         
-        # The prompt forces Gemini to give us JSON we can use in code
         prompt = f"""
-        Act as a Clinical Data Extraction Engine. 
+        Act as a Clinical Data Structuring Engine. 
         Analyze this patient note:
         '''{note_text}'''
         
@@ -455,14 +439,18 @@ def parse_patient_note(note_text):
         
         Required JSON Keys:
         - "age": (integer)
-        - "sbp": (integer, Systolic BP)
-        - "dbp": (integer, Diastolic BP)
+        - "gender": (string, 'Male' or 'Female')
+        - "sbp": (integer, Systolic BP - top number)
+        - "dbp": (integer, Diastolic BP - bottom number)
         - "heart_rate": (integer)
         - "resp_rate": (integer)
         - "creatinine": (float)
         - "inr": (float)
+        - "medications": (list of strings, generic names)
         - "is_on_anticoagulants": (boolean)
         - "is_on_nsaids": (boolean)
+        - "temp": (float, Celsius)
+        - "spo2": (integer)
         
         Return ONLY the JSON. No markdown.
         """
