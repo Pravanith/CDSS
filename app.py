@@ -384,6 +384,27 @@ else:
     if menu == "ER Triage Board":
         render_triage_board()
     elif menu == "Risk Calculator":
+        if 'extracted' not in st.session_state:
+            st.session_state.extracted = {}
+
+        # The Note Input Box
+        with st.expander("📝 Import Data from Patient Note (EHR Mode)", expanded=True):
+            patient_note = st.text_area(
+                "Paste Note Here:", 
+                placeholder="Pt is 72yo male, BP 150/90, Creatinine 1.8, on Warfarin...",
+                height=100
+            )
+            
+            if st.button("🔍 Extract Clinical Data"):
+                import backend # Ensure backend is imported
+                with st.spinner("Analyzing text..."):
+                    data = backend.parse_patient_note(patient_note)
+                    if data:
+                        st.session_state.extracted = data
+                        st.success("Data extracted! Values below have been auto-filled.")
+                    else:
+                        st.error("Could not read note.")
+        
         render_risk_calculator()
     elif menu == "Patient History (SQL)":
         render_history_sql()
