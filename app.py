@@ -109,7 +109,7 @@ def render_risk_calculator():
             height=100
         )
         
-        if st.button("🔍 Extract Clinical Data"):
+        if st.button("🔍 Extract Clinical Data", key="extract_btn_1"):
             import backend 
             with st.spinner("Analyzing text..."):
                 data = backend.parse_patient_note(patient_note)
