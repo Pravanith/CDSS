@@ -424,41 +424,41 @@ def analyze_drug_interactions(drug_list):
 # 7. NEW: AI NOTE PARSER (THE EHR READER)
 # ==========================================
 def parse_patient_note(note_text):
+    import google.generativeai as genai
+    import streamlit as st
+    import json
+
     try:
+        # 1. Check for API Key first
+        if "GEMINI_API_KEY" not in st.secrets:
+            st.error("❌ Error: GEMINI_API_KEY is missing from .streamlit/secrets.toml")
+            return None
+
         api_key = st.secrets["GEMINI_API_KEY"]
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-2.0-flash')
+        
+        # 2. Use Stable Model
+        model = genai.GenerativeModel('gemini-1.5-flash')
         
         prompt = f"""
-        Act as a Clinical Data Structuring Engine. 
-        Analyze this patient note:
-        '''{note_text}'''
+        Extract clinical data from this note into JSON.
+        Note: {note_text}
         
-        Extract the following clinical variables into a valid JSON object.
-        If a value is not strictly mentioned, use null.
-        
-        Required JSON Keys:
-        - "age": (integer)
-        - "gender": (string, 'Male' or 'Female')
-        - "sbp": (integer, Systolic BP - top number)
-        - "dbp": (integer, Diastolic BP - bottom number)
-        - "heart_rate": (integer)
-        - "resp_rate": (integer)
-        - "creatinine": (float)
-        - "inr": (float)
-        - "medications": (list of strings, generic names)
-        - "is_on_anticoagulants": (boolean)
-        - "is_on_nsaids": (boolean)
-        - "temp": (float, Celsius)
-        - "spo2": (integer)
-        
-        Return ONLY the JSON. No markdown.
+        Return ONLY valid JSON with keys: age, sbp, dbp, heart_rate, resp_rate, creatinine, inr, is_on_anticoagulants, is_on_nsaids.
+        If value missing, use null.
         """
         
         response = model.generate_content(prompt)
-        clean_text = response.text.strip().replace('```json', '').replace('```', '')
+        
+        # 3. clean the response
+        clean_text = response.text.strip()
+        # Remove markdown ticks if present
+        if clean_text.startswith("```"):
+            clean_text = clean_text.split("```")[1].replace("json", "").strip()
+            
         return json.loads(clean_text)
         
     except Exception as e:
-        print(f"Extraction Error: {e}")
+        # 4. PRINT THE ERROR TO THE UI SO YOU CAN SEE IT
+        st.error(f"⚠️ AI Error: {str(e)}")
         return None
