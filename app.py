@@ -94,14 +94,40 @@ def render_triage_board():
         hide_index=True
     )
 
-# --- MODULE: RISK CALCULATOR (UPDATED) ---
+# --- MODULE: RISK CALCULATOR (UPDATED WITH AI + FHIR) ---
 def render_risk_calculator():
     st.subheader("Acute Risk Calculator")
     
+    # ---------------------------------------------------------
+    # 1. NEW: AI NOTE INPUT (NLP Mode)
+    # ---------------------------------------------------------
+    # This allows you to paste a note, which overrides manual entry
+    with st.expander("📝 Import Data from Patient Note (NLP Mode)", expanded=False):
+        patient_note = st.text_area(
+            "Paste Clinical Note:", 
+            placeholder="Pt is 68yo male, BP 88/50, HR 115. Labs: Creatinine 2.4, Lactate 4.2...",
+            height=100
+        )
+        
+        if st.button("🔍 Extract Clinical Data"):
+            import backend 
+            with st.spinner("Analyzing text..."):
+                data = backend.parse_patient_note(patient_note)
+                if data:
+                    # Save AI data and CLEAR the FHIR data so they don't conflict
+                    st.session_state['extracted'] = data
+                    st.session_state['fhir_import'] = {} 
+                    st.success("Data extracted successfully!")
+                else:
+                    st.error("Could not read note.")
+
+    # ---------------------------------------------------------
+    # 2. DATA ENTRY FORM
+    # ---------------------------------------------------------
     with st.container(border=True):
         st.markdown("#### 📝 Patient Data Entry")
         
-        # --- NEW: FHIR IMPORT BUTTON ---
+        # --- FHIR IMPORT BUTTON (Keep existing) ---
         col_load, col_clear = st.columns([1, 4])
         with col_load:
             if st.button("📥 Load Patient from EHR (FHIR)", type="secondary"):
@@ -112,12 +138,23 @@ def render_risk_calculator():
                     'wbc': 18.5, 'hgb': 9.2, 'plt': 140, 'inr': 1.1, 'lactate': 4.2,
                     'history': ['anticoag', 'heart_failure']
                 }
+                # Clear AI data so they don't conflict
+                st.session_state['extracted'] = {}
                 st.success("✅ HL7/FHIR Data Stream Imported")
 
-        # Helper to retrieve loaded values safely
+        # --- SMART HELPER FUNCTION ---
+        # Checks AI data first, then FHIR data, then defaults to 0
         def get_val(key, default):
-            if 'fhir_import' in st.session_state:
-                return st.session_state['fhir_import'].get(key, default)
+            ai_data = st.session_state.get('extracted', {})
+            fhir_data = st.session_state.get('fhir_import', {})
+            
+            # 1. Check AI Data
+            if ai_data and key in ai_data and ai_data[key] is not None:
+                return ai_data[key]
+            # 2. Check FHIR Data
+            if fhir_data and key in fhir_data and fhir_data[key] is not None:
+                return fhir_data[key]
+            # 3. Return Default
             return default
 
         with st.form("risk_form"):
@@ -148,8 +185,11 @@ def render_risk_calculator():
                 dia_bp = v2.number_input("Diastolic BP", 0, 200, get_val('dbp', 0))
                 
                 v3, v4 = st.columns(2)
-                hr = v3.number_input("Heart Rate", 0, 300, get_val('hr', 0))
-                resp_rate = v4.number_input("Resp Rate", 0, 60, get_val('rr', 0))
+                hr = v3.number_input("Heart Rate", 0, 300, get_val('hr', 0)) # AI uses 'hr', FHIR uses 'hr', backend uses 'heart_rate'. Ensure mapping matches.
+                # AI backend maps 'heart_rate', so check that too
+                hr_val = get_val('heart_rate', 0) if get_val('hr', 0) == 0 else get_val('hr', 0)
+                
+                resp_rate = v4.number_input("Resp Rate", 0, 60, get_val('resp_rate', 0) or get_val('rr', 0))
                 
                 v5, v6 = st.columns(2)
                 temp_c = v5.number_input("Temp °C", 0.0, 45.0, float(get_val('temp', 0.0)), step=0.1)
@@ -159,7 +199,7 @@ def render_risk_calculator():
             with col_right:
                 st.markdown("##### 🧪 Critical Labs")
                 lab1, lab2 = st.columns(2)
-                creat = lab1.number_input("Creatinine", 0.0, 20.0, float(get_val('creat', 0.0)))
+                creat = lab1.number_input("Creatinine", 0.0, 20.0, float(get_val('creatinine', 0.0) or get_val('creat', 0.0)))
                 bun = lab2.number_input("BUN", 0, 100, get_val('bun', 0))
                 
                 lab3, lab4 = st.columns(2)
@@ -177,30 +217,36 @@ def render_risk_calculator():
                 lactate = st.number_input("Lactate", 0.0, 20.0, float(get_val('lactate', 0.0)))
 
                 st.markdown("##### 📋 Medical History")
-                hist = get_val('history', [])
+                # Logic: Check if it's in the AI boolean flags OR in the FHIR history list
+                ai_data = st.session_state.get('extracted', {})
+                hist_list = st.session_state.get('fhir_import', {}).get('history', [])
+                
                 h1, h2 = st.columns(2)
-                anticoag = h1.checkbox("Anticoagulant Use", value=('anticoag' in hist))
-                liver_disease = h2.checkbox("Liver Disease", value=('liver' in hist))
+                anticoag = h1.checkbox("Anticoagulant Use", value=(ai_data.get('is_on_anticoagulants') or 'anticoag' in hist_list))
+                liver_disease = h2.checkbox("Liver Disease", value=('liver' in hist_list))
+                
                 h3, h4 = st.columns(2)
-                heart_failure = h3.checkbox("Heart Failure", value=('heart_failure' in hist))
-                gi_bleed = h4.checkbox("History of GI Bleed", value=('gi_bleed' in hist))
+                heart_failure = h3.checkbox("Heart Failure", value=('heart_failure' in hist_list))
+                gi_bleed = h4.checkbox("History of GI Bleed", value=('gi_bleed' in hist_list))
                 
                 m1, m2 = st.columns(2)
-                nsaid = m1.checkbox("NSAID Use")
+                nsaid = m1.checkbox("NSAID Use", value=(ai_data.get('is_on_nsaids') or 'nsaid' in hist_list))
                 active_chemo = m2.checkbox("Active Chemo")
+                
                 m3, m4 = st.columns(2)
                 diuretic = m3.checkbox("Diuretic Use")
                 acei = m4.checkbox("ACEi/ARB")
+                
                 m5, m6 = st.columns(2)
                 insulin = m5.checkbox("Insulin")
                 hba1c_high = m6.checkbox("Uncontrolled Diabetes")
                 
-                altered_mental = st.checkbox("Altered Mental Status", value=('ams' in hist))
+                altered_mental = st.checkbox("Altered Mental Status", value=('ams' in hist_list))
 
             st.write("") 
             submitted = st.form_submit_button("🚀 Run Clinical Analysis", type="primary", use_container_width=True)
 
-    # --- LOGIC & RESULTS ---
+    # --- LOGIC & RESULTS (UNCHANGED) ---
     if submitted:
         # Calculations
         map_val = (sys_bp + (2 * dia_bp)) / 3 if sys_bp > 0 else 0
