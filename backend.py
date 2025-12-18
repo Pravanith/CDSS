@@ -1,3 +1,4 @@
+import json
 import sqlite3
 import pandas as pd
 import numpy as np
@@ -429,3 +430,47 @@ def analyze_drug_interactions(drug_list):
         return model.generate_content(prompt).text
     except Exception as e:
         return f"Error: {str(e)}"
+
+# ==========================================
+# NEW: AI NOTE READER (Add to bottom of backend.py)
+# ==========================================
+def parse_patient_note(note_text):
+    import google.generativeai as genai
+    import streamlit as st
+    
+    try:
+        # Configure Gemini
+        api_key = st.secrets["GEMINI_API_KEY"]
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel('gemini-2.0-flash')
+        
+        # The prompt forces Gemini to give us JSON we can use in code
+        prompt = f"""
+        Act as a Clinical Data Extraction Engine. 
+        Analyze this patient note:
+        '''{note_text}'''
+        
+        Extract the following clinical variables into a valid JSON object.
+        If a value is not strictly mentioned, use null.
+        
+        Required JSON Keys:
+        - "age": (integer)
+        - "sbp": (integer, Systolic BP)
+        - "dbp": (integer, Diastolic BP)
+        - "heart_rate": (integer)
+        - "resp_rate": (integer)
+        - "creatinine": (float)
+        - "inr": (float)
+        - "is_on_anticoagulants": (boolean)
+        - "is_on_nsaids": (boolean)
+        
+        Return ONLY the JSON. No markdown.
+        """
+        
+        response = model.generate_content(prompt)
+        clean_text = response.text.strip().replace('```json', '').replace('```', '')
+        return json.loads(clean_text)
+        
+    except Exception as e:
+        print(f"Extraction Error: {e}")
+        return None
